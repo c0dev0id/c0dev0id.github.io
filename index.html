@@ -33,7 +33,7 @@
             font-family: monospace;
             font-size: 48px;
             line-height: 1;
-            letter-spacing: 20px;
+            letter-spacing: 2px;
             font-weight: 300;
         }
     </style>
@@ -42,7 +42,7 @@
     <canvas id="canvas"></canvas>
     <noscript>
         <div class="static-fallback">
-            <pre>S H</pre>
+            <pre>shagen.me</pre>
         </div>
     </noscript>
 
@@ -101,48 +101,42 @@
             }
         }
 
-        // Initialize particles in "SH" shape (Stefan Hagen initials)
+        // Initialize particles in "shagen.me" text shape
         let particleArray = [];
 
         function init() {
             particleArray = [];
 
-            // Create a grid of particles
-            const gridSize = 15;
-            const centerX = canvas.width / 2;
-            const centerY = canvas.height / 2;
-            const width = 400;
-            const height = 200;
+            // Create temporary canvas to render text
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d');
 
-            for (let y = 0; y < height; y += gridSize) {
-                for (let x = 0; x < width; x += gridSize) {
-                    let posX = centerX - width / 2 + x;
-                    let posY = centerY - height / 2 + y;
+            const fontSize = 80;
+            const text = 'shagen.me';
 
-                    // Create "S H" pattern
-                    let shouldDraw = false;
+            tempCtx.font = `${fontSize}px monospace`;
+            const textWidth = tempCtx.measureText(text).width;
+            const textHeight = fontSize;
 
-                    // Letter S
-                    if (x < 150) {
-                        if ((y < 50 || (y > 75 && y < 125) || y > 150)) {
-                            shouldDraw = true;
-                        }
-                        if (x < 30 && y > 50 && y < 75) {
-                            shouldDraw = true;
-                        }
-                        if (x > 120 && y > 125 && y < 150) {
-                            shouldDraw = true;
-                        }
-                    }
+            tempCanvas.width = textWidth;
+            tempCanvas.height = textHeight;
 
-                    // Letter H
-                    if (x > 250) {
-                        if ((x < 280 || x > 370) || (y > 90 && y < 110)) {
-                            shouldDraw = true;
-                        }
-                    }
+            tempCtx.font = `${fontSize}px monospace`;
+            tempCtx.fillStyle = 'black';
+            tempCtx.fillText(text, 0, fontSize * 0.8);
 
-                    if (shouldDraw) {
+            // Sample pixels and create particles
+            const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+            const gridSize = 4;
+
+            for (let y = 0; y < tempCanvas.height; y += gridSize) {
+                for (let x = 0; x < tempCanvas.width; x += gridSize) {
+                    const index = (y * tempCanvas.width + x) * 4;
+                    const alpha = imageData.data[index + 3];
+
+                    if (alpha > 128) {
+                        const posX = canvas.width / 2 - textWidth / 2 + x;
+                        const posY = canvas.height / 2 - textHeight / 2 + y;
                         particleArray.push(new Particle(posX, posY));
                     }
                 }
