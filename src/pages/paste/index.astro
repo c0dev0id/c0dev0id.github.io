@@ -1,0 +1,224 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+---
+
+<BaseLayout title="Paste Gallery">
+  <h1>Paste Gallery</h1>
+  <p class="subtitle">Visual gallery of files from <a href="https://home.codevoid.de/paste/all.html" target="_blank" rel="noopener">codevoid.de/paste</a></p>
+
+  <div id="loading" class="loading">Loading files...</div>
+  <div id="gallery" class="gallery"></div>
+</BaseLayout>
+
+<script>
+  // Fetch and render gallery on the client side
+  const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
+  const videoExtensions = ['mp4', 'webm', 'mov', 'avi'];
+  const codeExtensions = ['js', 'ts', 'py', 'c', 'cpp', 'h', 'rs', 'go', 'java', 'sh', 'lua', 'pl', 'rb'];
+  const docExtensions = ['pdf', 'txt', 'md', 'doc', 'docx', 'odt'];
+
+  function getFileType(ext: string): string {
+    if (imageExtensions.includes(ext)) return 'image';
+    if (videoExtensions.includes(ext)) return 'video';
+    if (codeExtensions.includes(ext)) return 'code';
+    if (docExtensions.includes(ext)) return 'document';
+    return 'other';
+  }
+
+  async function loadGallery() {
+    const loadingEl = document.getElementById('loading');
+    const galleryEl = document.getElementById('gallery');
+
+    try {
+      const response = await fetch('https://home.codevoid.de/paste/all.html');
+      const html = await response.text();
+
+      // Parse links from the HTML
+      const linkRegex = /<a href="\/paste\/([^"]+)">([^<]+)<\/a>/g;
+      const files: Array<{name: string, url: string, extension: string}> = [];
+      let match;
+
+      while ((match = linkRegex.exec(html)) !== null) {
+        const filename = match[1];
+        const extension = filename.split('.').pop()?.toLowerCase() || '';
+        files.push({
+          name: filename,
+          url: `https://home.codevoid.de/paste/${filename}`,
+          extension
+        });
+      }
+
+      // Hide loading, show gallery
+      if (loadingEl) loadingEl.style.display = 'none';
+
+      // Render cards
+      if (galleryEl) {
+        files.forEach(file => {
+          const fileType = getFileType(file.extension);
+          const card = document.createElement('a');
+          card.href = file.url;
+          card.target = '_blank';
+          card.rel = 'noopener';
+          card.className = `card ${fileType}`;
+
+          const cardContent = document.createElement('div');
+          cardContent.className = 'card-content';
+
+          if (fileType === 'image') {
+            const img = document.createElement('img');
+            img.src = file.url;
+            img.alt = file.name;
+            img.loading = 'lazy';
+            cardContent.appendChild(img);
+          } else if (fileType === 'video') {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'video-placeholder';
+            placeholder.innerHTML = `
+              <span class="icon">▶</span>
+              <span class="extension">.${file.extension}</span>
+            `;
+            cardContent.appendChild(placeholder);
+          } else {
+            const placeholder = document.createElement('div');
+            placeholder.className = 'file-placeholder';
+            placeholder.innerHTML = `<span class="extension">.${file.extension}</span>`;
+            cardContent.appendChild(placeholder);
+          }
+
+          const cardFooter = document.createElement('div');
+          cardFooter.className = 'card-footer';
+          cardFooter.innerHTML = `<span class="filename">${file.name}</span>`;
+
+          card.appendChild(cardContent);
+          card.appendChild(cardFooter);
+          galleryEl.appendChild(card);
+        });
+      }
+    } catch (error) {
+      if (loadingEl) {
+        loadingEl.textContent = 'Failed to load files. Please check your connection.';
+        loadingEl.className = 'loading error';
+      }
+      console.error('Failed to load paste gallery:', error);
+    }
+  }
+
+  // Load on page load
+  loadGallery();
+</script>
+
+<style>
+  h1 {
+    margin-bottom: 0.5rem;
+  }
+
+  .subtitle {
+    margin-bottom: 2rem;
+    color: #666;
+  }
+
+  .subtitle a {
+    color: #000;
+    text-decoration: underline;
+  }
+
+  .loading {
+    padding: 2rem;
+    text-align: center;
+    color: #666;
+  }
+
+  .loading.error {
+    color: #d00;
+  }
+
+  .gallery {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 1.5rem;
+    margin-top: 2rem;
+  }
+
+  .card {
+    display: block;
+    border: 1px solid #000;
+    background: #fff;
+    text-decoration: none;
+    color: #000;
+    overflow: hidden;
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+
+  .card:hover {
+    transform: translateY(-4px);
+    box-shadow: 4px 4px 0 #000;
+  }
+
+  .card-content {
+    width: 100%;
+    height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #fafafa;
+    overflow: hidden;
+  }
+
+  .card.image .card-content {
+    background: #fff;
+  }
+
+  .card-content img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .video-placeholder,
+  .file-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+    gap: 0.5rem;
+  }
+
+  .video-placeholder .icon {
+    font-size: 3rem;
+  }
+
+  .extension {
+    font-family: monospace;
+    font-size: 1.5rem;
+    font-weight: bold;
+  }
+
+  .file-placeholder .extension {
+    font-size: 2rem;
+  }
+
+  .card-footer {
+    padding: 0.75rem;
+    border-top: 1px solid #000;
+    background: #fff;
+  }
+
+  .filename {
+    font-size: 0.875rem;
+    word-break: break-word;
+    font-family: monospace;
+  }
+
+  @media (max-width: 768px) {
+    .gallery {
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      gap: 1rem;
+    }
+
+    .card-content {
+      height: 150px;
+    }
+  }
+</style>
