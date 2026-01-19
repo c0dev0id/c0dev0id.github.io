@@ -19,6 +19,7 @@
 
         canvas {
             display: block;
+            touch-action: none;
         }
 
         .static-fallback {
@@ -156,6 +157,31 @@
         });
 
         window.addEventListener('mouseout', function() {
+            mouse.x = undefined;
+            mouse.y = undefined;
+        });
+
+        // Touch support for mobile devices
+        window.addEventListener('touchstart', function(event) {
+            if (event.touches.length > 0) {
+                mouse.x = event.touches[0].clientX;
+                mouse.y = event.touches[0].clientY;
+            }
+        }, { passive: true });
+
+        window.addEventListener('touchmove', function(event) {
+            if (event.touches.length > 0) {
+                mouse.x = event.touches[0].clientX;
+                mouse.y = event.touches[0].clientY;
+            }
+        }, { passive: true });
+
+        window.addEventListener('touchend', function() {
+            mouse.x = undefined;
+            mouse.y = undefined;
+        });
+
+        window.addEventListener('touchcancel', function() {
             mouse.x = undefined;
             mouse.y = undefined;
         });
