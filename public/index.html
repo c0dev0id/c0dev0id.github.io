@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Particle System Demo - shagen.me</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            overflow: hidden;
+            background: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        .static-fallback {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            color: rgba(0, 0, 0, 0.8);
+        }
+
+        .static-fallback pre {
+            font-family: monospace;
+            font-size: 48px;
+            line-height: 1;
+            letter-spacing: 2px;
+            font-weight: 300;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+    <noscript>
+        <div class="static-fallback">
+            <pre>shagen.me</pre>
+        </div>
+    </noscript>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Set canvas size
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        // Particle class
+        class Particle {
+            constructor(x, y) {
+                this.x = x;
+                this.y = y;
+                this.size = Math.random() * 2 + 0.5;
+                this.baseX = this.x;
+                this.baseY = this.y;
+                this.density = (Math.random() * 30) + 10;
+                this.distance = 0;
+            }
+
+            draw() {
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            update() {
+                let dx = mouse.x - this.x;
+                let dy = mouse.y - this.y;
+                let distance = Math.sqrt(dx * dx + dy * dy);
+                let forceDirectionX = dx / distance;
+                let forceDirectionY = dy / distance;
+                let maxDistance = mouse.radius;
+                let force = (maxDistance - distance) / maxDistance;
+                let directionX = forceDirectionX * force * this.density;
+                let directionY = forceDirectionY * force * this.density;
+
+                if (distance < mouse.radius) {
+                    this.x -= directionX;
+                    this.y -= directionY;
+                } else {
+                    if (this.x !== this.baseX) {
+                        let dx = this.x - this.baseX;
+                        this.x -= dx / 10;
+                    }
+                    if (this.y !== this.baseY) {
+                        let dy = this.y - this.baseY;
+                        this.y -= dy / 10;
+                    }
+                }
+            }
+        }
+
+        // Initialize particles in "shagen.me" text shape
+        let particleArray = [];
+
+        function init() {
+            particleArray = [];
+
+            // Create temporary canvas to render text
+            const tempCanvas = document.createElement('canvas');
+            const tempCtx = tempCanvas.getContext('2d');
+
+            const fontSize = 80;
+            const text = 'shagen.me';
+
+            tempCtx.font = `${fontSize}px monospace`;
+            const textWidth = tempCtx.measureText(text).width;
+            const textHeight = fontSize;
+
+            tempCanvas.width = textWidth;
+            tempCanvas.height = textHeight;
+
+            tempCtx.font = `${fontSize}px monospace`;
+            tempCtx.fillStyle = 'black';
+            tempCtx.fillText(text, 0, fontSize * 0.8);
+
+            // Sample pixels and create particles
+            const imageData = tempCtx.getImageData(0, 0, tempCanvas.width, tempCanvas.height);
+            const gridSize = 4;
+
+            for (let y = 0; y < tempCanvas.height; y += gridSize) {
+                for (let x = 0; x < tempCanvas.width; x += gridSize) {
+                    const index = (y * tempCanvas.width + x) * 4;
+                    const alpha = imageData.data[index + 3];
+
+                    if (alpha > 128) {
+                        const posX = canvas.width / 2 - textWidth / 2 + x;
+                        const posY = canvas.height / 2 - textHeight / 2 + y;
+                        particleArray.push(new Particle(posX, posY));
+                    }
+                }
+            }
+        }
+
+        // Mouse object
+        const mouse = {
+            x: null,
+            y: null,
+            radius: 100
+        };
+
+        window.addEventListener('mousemove', function(event) {
+            mouse.x = event.x;
+            mouse.y = event.y;
+        });
+
+        window.addEventListener('mouseout', function() {
+            mouse.x = undefined;
+            mouse.y = undefined;
+        });
+
+        // Animation loop
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            for (let i = 0; i < particleArray.length; i++) {
+                particleArray[i].draw();
+                particleArray[i].update();
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        // Handle window resize
+        window.addEventListener('resize', function() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            init();
+        });
+
+        // Start
+        init();
+        animate();
+    </script>
+</body>
+</html>
