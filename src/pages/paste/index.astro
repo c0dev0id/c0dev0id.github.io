@@ -13,7 +13,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 <script>
   // IndexedDB setup for thumbnail caching
   const DB_NAME = 'PasteGalleryCache';
-  const DB_VERSION = 3; // Updated for text preview generation
+  const DB_VERSION = 4; // Updated for binary preview generation
   const STORE_NAME = 'thumbnails';
   const THUMBNAIL_SIZE = 700; // 2x card size for better quality
 
@@ -168,17 +168,67 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
     }
   }
 
+  function createBinaryPreview(extension: string, fileType: string): string {
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    if (!ctx) return '';
+
+    const size = THUMBNAIL_SIZE;
+    canvas.width = size;
+    canvas.height = size;
+
+    // Color schemes for different file types
+    const colorSchemes: Record<string, {bg: string, accent: string, icon: string}> = {
+      video: {bg: '#2d1b4e', accent: '#8b5cf6', icon: '▶'},
+      audio: {bg: '#1e3a4e', accent: '#3b82f6', icon: '♫'},
+      archive: {bg: '#4e3a1e', accent: '#f59e0b', icon: '📦'},
+      binary: {bg: '#1e4e3a', accent: '#10b981', icon: '⚙'},
+      other: {bg: '#3a3a3a', accent: '#6b7280', icon: '📄'}
+    };
+
+    const scheme = colorSchemes[fileType] || colorSchemes.other;
+
+    // Background
+    ctx.fillStyle = scheme.bg;
+    ctx.fillRect(0, 0, size, size);
+
+    // Draw icon
+    ctx.font = `${size * 0.3}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = scheme.accent;
+    ctx.fillText(scheme.icon, size / 2, size / 2 - 40);
+
+    // Draw extension badge
+    ctx.fillStyle = scheme.accent;
+    ctx.fillRect(0, size - 100, size, 100);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 48px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`.${extension.toUpperCase()}`, size / 2, size - 50);
+
+    return canvas.toDataURL('image/jpeg', 0.85);
+  }
+
   // File type detection
   const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
-  const videoExtensions = ['mp4', 'webm', 'mov', 'avi'];
-  const codeExtensions = ['js', 'ts', 'py', 'c', 'cpp', 'h', 'rs', 'go', 'java', 'sh', 'lua', 'pl', 'rb'];
-  const docExtensions = ['pdf', 'txt', 'md', 'doc', 'docx', 'odt'];
+  const videoExtensions = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'flv'];
+  const audioExtensions = ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac'];
+  const archiveExtensions = ['zip', 'tar', 'gz', 'bz2', 'xz', 'rar', '7z', 'tgz'];
+  const codeExtensions = ['js', 'ts', 'py', 'c', 'cpp', 'h', 'rs', 'go', 'java', 'sh', 'lua', 'pl', 'rb', 'php', 'css', 'html', 'json', 'xml', 'yaml', 'yml'];
+  const docExtensions = ['pdf', 'txt', 'md', 'doc', 'docx', 'odt', 'rtf'];
+  const binaryExtensions = ['bin', 'exe', 'dll', 'so', 'dylib', 'o', 'a'];
 
   function getFileType(ext: string): string {
     if (imageExtensions.includes(ext)) return 'image';
     if (videoExtensions.includes(ext)) return 'video';
+    if (audioExtensions.includes(ext)) return 'audio';
+    if (archiveExtensions.includes(ext)) return 'archive';
     if (codeExtensions.includes(ext)) return 'code';
     if (docExtensions.includes(ext)) return 'document';
+    if (binaryExtensions.includes(ext)) return 'binary';
     return 'other';
   }
 
@@ -245,6 +295,22 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
     }
   }
 
+  async function loadBinaryCard(file: {name: string, url: string, extension: string}, fileType: string, cardContent: HTMLElement) {
+    // Try to get cached preview first
+    const cached = await getThumbnailFromCache(file.url);
+
+    if (cached) {
+      cardContent.style.backgroundImage = `url(${cached})`;
+    } else {
+      // Generate preview without downloading file
+      const preview = createBinaryPreview(file.extension, fileType);
+      if (preview) {
+        await saveThumbnailToCache(file.url, preview);
+        cardContent.style.backgroundImage = `url(${preview})`;
+      }
+    }
+  }
+
   async function loadGallery() {
     const loadingEl = document.getElementById('loading');
     const galleryEl = document.getElementById('gallery');
@@ -293,19 +359,9 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
           } else if (fileType === 'code' || fileType === 'document') {
             // Load text preview with caching
             loadTextCard(file, cardContent);
-          } else if (fileType === 'video') {
-            const placeholder = document.createElement('div');
-            placeholder.className = 'video-placeholder';
-            placeholder.innerHTML = `
-              <span class="icon">▶</span>
-              <span class="extension">.${file.extension}</span>
-            `;
-            cardContent.appendChild(placeholder);
-          } else {
-            const placeholder = document.createElement('div');
-            placeholder.className = 'file-placeholder';
-            placeholder.innerHTML = `<span class="extension">.${file.extension}</span>`;
-            cardContent.appendChild(placeholder);
+          } else if (fileType === 'video' || fileType === 'audio' || fileType === 'archive' || fileType === 'binary' || fileType === 'other') {
+            // Load binary preview with caching
+            loadBinaryCard(file, fileType, cardContent);
           }
 
           const cardFooter = document.createElement('div');
