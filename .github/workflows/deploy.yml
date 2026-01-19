@@ -2,7 +2,7 @@ name: Deploy to GitHub Pages
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, claude/shagen-website-continue-PO4R1 ]
   workflow_dispatch:
 
 permissions:
