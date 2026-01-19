@@ -21,23 +21,24 @@
             display: block;
         }
 
-        #info {
-            position: absolute;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            color: rgba(255, 255, 255, 0.3);
-            font-size: 12px;
-            text-align: center;
-            pointer-events: none;
+        .static-fallback {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            font-size: 120px;
             font-weight: 300;
-            letter-spacing: 2px;
+            color: #FA7A35;
+            letter-spacing: 40px;
+            padding-left: 40px;
         }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
-    <div id="info">MOVE YOUR MOUSE</div>
+    <noscript>
+        <div class="static-fallback">SH</div>
+    </noscript>
 
     <script>
         const canvas = document.getElementById('canvas');
@@ -60,7 +61,7 @@
             }
 
             draw() {
-                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.fillStyle = 'rgba(250, 122, 53, 0.8)';
                 ctx.beginPath();
                 ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
                 ctx.closePath();
