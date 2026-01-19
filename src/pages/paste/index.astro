@@ -13,7 +13,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 <script>
   // IndexedDB setup for thumbnail caching
   const DB_NAME = 'PasteGalleryCache';
-  const DB_VERSION = 2; // Updated for new square crop format
+  const DB_VERSION = 3; // Updated for text preview generation
   const STORE_NAME = 'thumbnails';
   const THUMBNAIL_SIZE = 700; // 2x card size for better quality
 
@@ -109,6 +109,65 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
     });
   }
 
+  async function createTextPreview(fileUrl: string, extension: string): Promise<string> {
+    try {
+      // Fetch file content
+      const response = await fetch(fileUrl);
+      const text = await response.text();
+
+      // Create canvas
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+
+      if (!ctx) throw new Error('No canvas context');
+
+      const size = THUMBNAIL_SIZE;
+      canvas.width = size;
+      canvas.height = size;
+
+      // Background
+      ctx.fillStyle = '#1e1e1e';
+      ctx.fillRect(0, 0, size, size);
+
+      // Setup text rendering
+      const fontSize = 16;
+      const lineHeight = 24;
+      const padding = 30;
+      ctx.font = `${fontSize}px "Consolas", "Monaco", "Courier New", monospace`;
+      ctx.textBaseline = 'top';
+
+      // Draw extension badge
+      ctx.fillStyle = '#007acc';
+      ctx.fillRect(0, 0, size, 40);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 18px sans-serif';
+      ctx.fillText(`.${extension}`, padding, 10);
+
+      // Draw file content
+      ctx.font = `${fontSize}px "Consolas", "Monaco", "Courier New", monospace`;
+      ctx.fillStyle = '#d4d4d4';
+
+      const lines = text.split('\n').slice(0, 25); // First 25 lines
+      let y = 60;
+
+      for (const line of lines) {
+        if (y > size - padding) break;
+
+        // Truncate long lines
+        const maxChars = Math.floor((size - padding * 2) / (fontSize * 0.6));
+        const displayLine = line.length > maxChars ? line.substring(0, maxChars) + '...' : line;
+
+        ctx.fillText(displayLine, padding, y);
+        y += lineHeight;
+      }
+
+      return canvas.toDataURL('image/jpeg', 0.85);
+    } catch (error) {
+      console.error('Failed to create text preview:', error);
+      return '';
+    }
+  }
+
   // File type detection
   const imageExtensions = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp'];
   const videoExtensions = ['mp4', 'webm', 'mov', 'avi'];
@@ -147,6 +206,38 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
       } catch (error) {
         // Fallback to original image as background
         cardContent.style.backgroundImage = `url(${file.url})`;
+        if (loadingDiv.parentNode) {
+          cardContent.removeChild(loadingDiv);
+        }
+      }
+    }
+  }
+
+  async function loadTextCard(file: {name: string, url: string, extension: string}, cardContent: HTMLElement) {
+    // Try to get cached preview first
+    const cached = await getThumbnailFromCache(file.url);
+
+    if (cached) {
+      cardContent.style.backgroundImage = `url(${cached})`;
+    } else {
+      // Show loading placeholder
+      const loadingDiv = document.createElement('div');
+      loadingDiv.className = 'image-loading';
+      loadingDiv.textContent = '...';
+      cardContent.appendChild(loadingDiv);
+
+      // Create and cache preview
+      try {
+        const preview = await createTextPreview(file.url, file.extension);
+        if (preview) {
+          await saveThumbnailToCache(file.url, preview);
+          cardContent.style.backgroundImage = `url(${preview})`;
+          cardContent.removeChild(loadingDiv);
+        } else {
+          // Fallback to placeholder
+          cardContent.removeChild(loadingDiv);
+        }
+      } catch (error) {
         if (loadingDiv.parentNode) {
           cardContent.removeChild(loadingDiv);
         }
@@ -199,6 +290,9 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
           if (fileType === 'image') {
             // Load image with caching
             loadImageCard(file, cardContent);
+          } else if (fileType === 'code' || fileType === 'document') {
+            // Load text preview with caching
+            loadTextCard(file, cardContent);
           } else if (fileType === 'video') {
             const placeholder = document.createElement('div');
             placeholder.className = 'video-placeholder';
