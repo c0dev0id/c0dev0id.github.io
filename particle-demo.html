@@ -26,18 +26,32 @@
             align-items: center;
             justify-content: center;
             min-height: 100vh;
-            font-size: 120px;
-            font-weight: 300;
-            color: #FA7A35;
-            letter-spacing: 40px;
-            padding-left: 40px;
+            color: rgba(255, 255, 255, 0.8);
+        }
+
+        .static-fallback pre {
+            font-family: monospace;
+            font-size: 16px;
+            line-height: 1.5;
+            letter-spacing: 2px;
         }
     </style>
 </head>
 <body>
     <canvas id="canvas"></canvas>
     <noscript>
-        <div class="static-fallback">SH</div>
+        <div class="static-fallback">
+            <pre>
+●●●●●●●●●●           ●●          ●●
+●●                  ●●          ●●
+●●                  ●●          ●●
+ ●●●●●●●            ●●          ●●
+       ●●●          ●●●●●●●●●●●●●●
+         ●●         ●●          ●●
+         ●●         ●●          ●●
+●●●●●●●●●           ●●          ●●
+            </pre>
+        </div>
     </noscript>
 
     <script>
@@ -61,7 +75,7 @@
             }
 
             draw() {
-                ctx.fillStyle = 'rgba(250, 122, 53, 0.8)';
+                ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
                 ctx.beginPath();
                 ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
                 ctx.closePath();
