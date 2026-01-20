@@ -13,11 +13,13 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 <script>
   // IndexedDB setup for thumbnail caching
   const DB_NAME = 'PasteGalleryCache';
-  const DB_VERSION = 4; // Updated for binary preview generation
+  const DB_VERSION = 5; // Updated for new preview system
   const STORE_NAME = 'thumbnails';
   const THUMBNAIL_SIZE = 700; // 2x card size for better quality
 
   let db: IDBDatabase | null = null;
+  let currentlyPlayingAudio: HTMLAudioElement | null = null;
+  let currentlyPlayingVideo: HTMLVideoElement | null = null;
 
   async function initDB(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
@@ -78,19 +80,20 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
           return;
         }
 
-        // Create square thumbnail by cropping from center
-        const size = THUMBNAIL_SIZE;
-        canvas.width = size;
-        canvas.height = size;
+        // Create 16:10 thumbnail by cropping from center
+        const width = THUMBNAIL_SIZE;
+        const height = Math.round(THUMBNAIL_SIZE * 10 / 16); // 16:10 aspect ratio
+        canvas.width = width;
+        canvas.height = height;
 
-        // Calculate scaling to ensure image covers the square
-        const scale = Math.max(size / img.width, size / img.height);
+        // Calculate scaling to ensure image covers the rectangle
+        const scale = Math.max(width / img.width, height / img.height);
         const scaledWidth = img.width * scale;
         const scaledHeight = img.height * scale;
 
         // Calculate crop position (center)
-        const x = (size - scaledWidth) / 2;
-        const y = (size - scaledHeight) / 2;
+        const x = (width - scaledWidth) / 2;
+        const y = (height - scaledHeight) / 2;
 
         // Draw scaled and centered image
         ctx.drawImage(img, x, y, scaledWidth, scaledHeight);
@@ -109,62 +112,85 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
     });
   }
 
-  async function createTextPreview(fileUrl: string, extension: string): Promise<string> {
+  async function generateTextSummary(fileUrl: string): Promise<string> {
     try {
       // Fetch file content
       const response = await fetch(fileUrl);
       const text = await response.text();
 
-      // Create canvas
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-
-      if (!ctx) throw new Error('No canvas context');
-
-      const size = THUMBNAIL_SIZE;
-      canvas.width = size;
-      canvas.height = size;
-
-      // Background
-      ctx.fillStyle = '#1e1e1e';
-      ctx.fillRect(0, 0, size, size);
-
-      // Setup text rendering
-      const fontSize = 16;
-      const lineHeight = 24;
-      const padding = 30;
-      ctx.font = `${fontSize}px "Consolas", "Monaco", "Courier New", monospace`;
-      ctx.textBaseline = 'top';
-
-      // Draw extension badge
-      ctx.fillStyle = '#007acc';
-      ctx.fillRect(0, 0, size, 40);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 18px sans-serif';
-      ctx.fillText(`.${extension}`, padding, 10);
-
-      // Draw file content
-      ctx.font = `${fontSize}px "Consolas", "Monaco", "Courier New", monospace`;
-      ctx.fillStyle = '#d4d4d4';
-
-      const lines = text.split('\n').slice(0, 25); // First 25 lines
-      let y = 60;
+      // Generate a simple summary: first few lines, up to 300 chars
+      const lines = text.split('\n').filter(line => line.trim().length > 0);
+      let summary = '';
 
       for (const line of lines) {
-        if (y > size - padding) break;
-
-        // Truncate long lines
-        const maxChars = Math.floor((size - padding * 2) / (fontSize * 0.6));
-        const displayLine = line.length > maxChars ? line.substring(0, maxChars) + '...' : line;
-
-        ctx.fillText(displayLine, padding, y);
-        y += lineHeight;
+        if (summary.length + line.length > 300) {
+          summary += '...';
+          break;
+        }
+        summary += line + '\n';
       }
 
-      return canvas.toDataURL('image/jpeg', 0.85);
+      return summary || text.substring(0, 300) + (text.length > 300 ? '...' : '');
     } catch (error) {
-      console.error('Failed to create text preview:', error);
+      console.error('Failed to generate text summary:', error);
       return '';
+    }
+  }
+
+  async function detectFileTypeFromBytes(fileUrl: string): Promise<string> {
+    try {
+      // Fetch first 1KB of file
+      const response = await fetch(fileUrl, {
+        headers: { 'Range': 'bytes=0-1023' }
+      });
+
+      const buffer = await response.arrayBuffer();
+      const bytes = new Uint8Array(buffer);
+
+      // Check magic numbers for common file types
+      if (bytes.length >= 4) {
+        // PDF
+        if (bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46) {
+          return 'pdf';
+        }
+        // ZIP/Archive
+        if (bytes[0] === 0x50 && bytes[1] === 0x4B) {
+          return 'archive';
+        }
+        // ELF binary
+        if (bytes[0] === 0x7F && bytes[1] === 0x45 && bytes[2] === 0x4C && bytes[3] === 0x46) {
+          return 'binary';
+        }
+        // JPEG
+        if (bytes[0] === 0xFF && bytes[1] === 0xD8 && bytes[2] === 0xFF) {
+          return 'image';
+        }
+        // PNG
+        if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4E && bytes[3] === 0x47) {
+          return 'image';
+        }
+        // GIF
+        if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46) {
+          return 'image';
+        }
+      }
+
+      // Check if text (printable ASCII or UTF-8)
+      let textChars = 0;
+      for (let i = 0; i < Math.min(bytes.length, 512); i++) {
+        if ((bytes[i] >= 32 && bytes[i] <= 126) || bytes[i] === 9 || bytes[i] === 10 || bytes[i] === 13) {
+          textChars++;
+        }
+      }
+
+      if (textChars / Math.min(bytes.length, 512) > 0.85) {
+        return 'text';
+      }
+
+      return 'binary';
+    } catch (error) {
+      console.error('Failed to detect file type:', error);
+      return 'other';
     }
   }
 
@@ -174,9 +200,10 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 
     if (!ctx) return '';
 
-    const size = THUMBNAIL_SIZE;
-    canvas.width = size;
-    canvas.height = size;
+    const width = THUMBNAIL_SIZE;
+    const height = Math.round(THUMBNAIL_SIZE * 10 / 16); // 16:10 aspect ratio
+    canvas.width = width;
+    canvas.height = height;
 
     // Color schemes for different file types
     const colorSchemes: Record<string, {bg: string, accent: string, icon: string}> = {
@@ -191,23 +218,23 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 
     // Background
     ctx.fillStyle = scheme.bg;
-    ctx.fillRect(0, 0, size, size);
+    ctx.fillRect(0, 0, width, height);
 
     // Draw icon
-    ctx.font = `${size * 0.3}px sans-serif`;
+    ctx.font = `${height * 0.4}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = scheme.accent;
-    ctx.fillText(scheme.icon, size / 2, size / 2 - 40);
+    ctx.fillText(scheme.icon, width / 2, height / 2 - 30);
 
     // Draw extension badge
     ctx.fillStyle = scheme.accent;
-    ctx.fillRect(0, size - 100, size, 100);
+    ctx.fillRect(0, height - 80, width, 80);
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 48px sans-serif';
+    ctx.font = 'bold 36px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(`.${extension.toUpperCase()}`, size / 2, size - 50);
+    ctx.fillText(`.${extension.toUpperCase()}`, width / 2, height - 40);
 
     return canvas.toDataURL('image/jpeg', 0.85);
   }
@@ -264,27 +291,32 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
   }
 
   async function loadTextCard(file: {name: string, url: string, extension: string}, cardContent: HTMLElement) {
-    // Try to get cached preview first
+    // Try to get cached summary first
     const cached = await getThumbnailFromCache(file.url);
 
     if (cached) {
-      cardContent.style.backgroundImage = `url(${cached})`;
+      const textDiv = document.createElement('div');
+      textDiv.className = 'text-preview';
+      textDiv.innerHTML = `<div class="extension-badge">.${file.extension}</div><div class="text-content">${cached}</div>`;
+      cardContent.appendChild(textDiv);
     } else {
       // Show loading placeholder
       const loadingDiv = document.createElement('div');
       loadingDiv.className = 'image-loading';
-      loadingDiv.textContent = '...';
       cardContent.appendChild(loadingDiv);
 
-      // Create and cache preview
+      // Generate and cache summary
       try {
-        const preview = await createTextPreview(file.url, file.extension);
-        if (preview) {
-          await saveThumbnailToCache(file.url, preview);
-          cardContent.style.backgroundImage = `url(${preview})`;
+        const summary = await generateTextSummary(file.url);
+        if (summary) {
+          await saveThumbnailToCache(file.url, summary);
           cardContent.removeChild(loadingDiv);
+
+          const textDiv = document.createElement('div');
+          textDiv.className = 'text-preview';
+          textDiv.innerHTML = `<div class="extension-badge">.${file.extension}</div><div class="text-content">${summary}</div>`;
+          cardContent.appendChild(textDiv);
         } else {
-          // Fallback to placeholder
           cardContent.removeChild(loadingDiv);
         }
       } catch (error) {
@@ -292,6 +324,180 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
           cardContent.removeChild(loadingDiv);
         }
       }
+    }
+  }
+
+  async function loadVideoCard(file: {name: string, url: string, extension: string}, cardContent: HTMLElement) {
+    // Create video element for 3-second preview loop
+    const video = document.createElement('video');
+    video.src = file.url;
+    video.className = 'video-preview';
+    video.loop = true;
+    video.muted = true;
+    video.playsInline = true;
+
+    // Try to start at a good position (skip intro)
+    video.addEventListener('loadedmetadata', () => {
+      if (video.duration > 3) {
+        video.currentTime = Math.min(video.duration * 0.1, 5); // Start 10% in or at 5s
+      }
+      video.play().catch(() => {
+        // If autoplay fails, show play button overlay
+        const playOverlay = document.createElement('div');
+        playOverlay.className = 'play-overlay';
+        playOverlay.innerHTML = '▶';
+        playOverlay.onclick = (e) => {
+          e.stopPropagation();
+          video.play();
+          playOverlay.remove();
+        };
+        cardContent.appendChild(playOverlay);
+      });
+    });
+
+    cardContent.appendChild(video);
+  }
+
+  async function loadAudioCard(file: {name: string, url: string, extension: string}, cardContent: HTMLElement) {
+    // Create animated waveform canvas
+    const canvas = document.createElement('canvas');
+    canvas.className = 'audio-waveform';
+    canvas.width = 600;
+    canvas.height = 400;
+    cardContent.appendChild(canvas);
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Create audio element
+    const audio = new Audio(file.url);
+    audio.loop = false;
+
+    // Create play/pause button
+    const playButton = document.createElement('button');
+    playButton.className = 'audio-play-button';
+    playButton.innerHTML = '▶';
+    playButton.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (audio.paused) {
+        // Pause all other audio/video
+        if (currentlyPlayingAudio && currentlyPlayingAudio !== audio) {
+          currentlyPlayingAudio.pause();
+        }
+        if (currentlyPlayingVideo) {
+          currentlyPlayingVideo.pause();
+        }
+
+        audio.play();
+        playButton.innerHTML = '⏸';
+        playButton.classList.add('playing');
+        currentlyPlayingAudio = audio;
+      } else {
+        audio.pause();
+        playButton.innerHTML = '▶';
+        playButton.classList.remove('playing');
+        currentlyPlayingAudio = null;
+      }
+    };
+
+    audio.onended = () => {
+      playButton.innerHTML = '▶';
+      playButton.classList.remove('playing');
+      currentlyPlayingAudio = null;
+    };
+
+    cardContent.appendChild(playButton);
+
+    // Animated waveform (default idle animation)
+    let animationFrame = 0;
+    let analyserData: Uint8Array | null = null;
+
+    // Try to create audio context for real-time visualization
+    try {
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const analyser = audioContext.createAnalyser();
+      const source = audioContext.createMediaElementSource(audio);
+      source.connect(analyser);
+      analyser.connect(audioContext.destination);
+      analyser.fftSize = 256;
+      analyserData = new Uint8Array(analyser.frequencyBinCount);
+
+      function drawWaveform() {
+        requestAnimationFrame(drawWaveform);
+
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        if (!audio.paused && analyserData) {
+          // Draw real-time frequency data
+          analyser.getByteFrequencyData(analyserData);
+
+          const barWidth = canvas.width / analyserData.length;
+          let x = 0;
+
+          for (let i = 0; i < analyserData.length; i++) {
+            const barHeight = (analyserData[i] / 255) * canvas.height * 0.8;
+
+            const gradient = ctx.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
+            gradient.addColorStop(0, '#00d9ff');
+            gradient.addColorStop(1, '#0066ff');
+
+            ctx.fillStyle = gradient;
+            ctx.fillRect(x, canvas.height - barHeight, barWidth - 2, barHeight);
+
+            x += barWidth;
+          }
+        } else {
+          // Draw idle animation
+          const bars = 32;
+          const barWidth = canvas.width / bars;
+
+          for (let i = 0; i < bars; i++) {
+            const barHeight = Math.abs(Math.sin(animationFrame * 0.05 + i * 0.3)) * canvas.height * 0.4 + 20;
+
+            const gradient = ctx.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
+            gradient.addColorStop(0, '#666');
+            gradient.addColorStop(1, '#333');
+
+            ctx.fillStyle = gradient;
+            ctx.fillRect(i * barWidth, canvas.height - barHeight, barWidth - 2, barHeight);
+          }
+
+          animationFrame++;
+        }
+      }
+
+      drawWaveform();
+    } catch (error) {
+      // Fallback to simple idle animation if audio context fails
+      console.error('Failed to create audio context:', error);
+
+      function drawSimpleWaveform() {
+        requestAnimationFrame(drawSimpleWaveform);
+
+        ctx.fillStyle = '#1a1a2e';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const bars = 32;
+        const barWidth = canvas.width / bars;
+
+        for (let i = 0; i < bars; i++) {
+          const barHeight = Math.abs(Math.sin(animationFrame * 0.05 + i * 0.3)) * canvas.height * 0.4 + 20;
+
+          const gradient = ctx.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
+          gradient.addColorStop(0, '#666');
+          gradient.addColorStop(1, '#333');
+
+          ctx.fillStyle = gradient;
+          ctx.fillRect(i * barWidth, canvas.height - barHeight, barWidth - 2, barHeight);
+        }
+
+        animationFrame++;
+      }
+
+      drawSimpleWaveform();
     }
   }
 
@@ -309,6 +515,121 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
         cardContent.style.backgroundImage = `url(${preview})`;
       }
     }
+  }
+
+  function createPopupModal(file: {name: string, url: string, extension: string}, fileType: string) {
+    // Create modal overlay
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+
+    const modalContent = document.createElement('div');
+    modalContent.className = 'modal-content';
+
+    const modalHeader = document.createElement('div');
+    modalHeader.className = 'modal-header';
+
+    const title = document.createElement('h2');
+    title.textContent = file.name;
+    modalHeader.appendChild(title);
+
+    const closeButton = document.createElement('button');
+    closeButton.className = 'modal-close';
+    closeButton.innerHTML = '×';
+    closeButton.onclick = () => {
+      modal.classList.remove('active');
+      setTimeout(() => modal.remove(), 300);
+
+      // Pause any playing media
+      const video = modalContent.querySelector('video') as HTMLVideoElement;
+      if (video) video.pause();
+    };
+    modalHeader.appendChild(closeButton);
+
+    const modalBody = document.createElement('div');
+    modalBody.className = 'modal-body';
+
+    // Create content based on file type
+    if (fileType === 'image') {
+      const img = document.createElement('img');
+      img.src = file.url;
+      img.className = 'modal-image';
+      modalBody.appendChild(img);
+    } else if (fileType === 'video') {
+      const video = document.createElement('video');
+      video.src = file.url;
+      video.className = 'modal-video';
+      video.controls = true;
+      video.autoplay = true;
+
+      // Pause other media when this plays
+      video.onplay = () => {
+        if (currentlyPlayingAudio) {
+          currentlyPlayingAudio.pause();
+        }
+        if (currentlyPlayingVideo && currentlyPlayingVideo !== video) {
+          currentlyPlayingVideo.pause();
+        }
+        currentlyPlayingVideo = video;
+      };
+
+      modalBody.appendChild(video);
+    } else if (file.extension === 'pdf') {
+      const iframe = document.createElement('iframe');
+      iframe.src = file.url;
+      iframe.className = 'modal-pdf';
+      modalBody.appendChild(iframe);
+    }
+
+    const modalFooter = document.createElement('div');
+    modalFooter.className = 'modal-footer';
+
+    const downloadButton = document.createElement('a');
+    downloadButton.className = 'download-button';
+    downloadButton.innerHTML = '⬇ Download';
+    downloadButton.onclick = async (e) => {
+      e.preventDefault();
+
+      try {
+        // Fetch and force download with application/octet-stream
+        const response = await fetch(file.url);
+        const blob = await response.blob();
+        const url = URL.createObjectURL(new Blob([blob], { type: 'application/octet-stream' }));
+
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = file.name;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } catch (error) {
+        console.error('Download failed:', error);
+        // Fallback to direct link
+        window.open(file.url, '_blank');
+      }
+    };
+    modalFooter.appendChild(downloadButton);
+
+    modalContent.appendChild(modalHeader);
+    modalContent.appendChild(modalBody);
+    modalContent.appendChild(modalFooter);
+    modal.appendChild(modalContent);
+
+    // Close on overlay click
+    modal.onclick = (e) => {
+      if (e.target === modal) {
+        modal.classList.remove('active');
+        setTimeout(() => modal.remove(), 300);
+
+        const video = modalContent.querySelector('video') as HTMLVideoElement;
+        if (video) video.pause();
+      }
+    };
+
+    document.body.appendChild(modal);
+
+    // Trigger animation
+    setTimeout(() => modal.classList.add('active'), 10);
   }
 
   async function loadGallery() {
@@ -346,9 +667,19 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
           const fileType = getFileType(file.extension);
           const card = document.createElement('a');
           card.href = file.url;
-          card.target = '_blank';
-          card.rel = 'noopener';
           card.className = `card ${fileType}`;
+
+          // For video, image, and PDF: prevent default and show popup
+          if (fileType === 'image' || fileType === 'video' || file.extension === 'pdf') {
+            card.onclick = (e) => {
+              e.preventDefault();
+              createPopupModal(file, fileType);
+            };
+          } else {
+            // For other files: open in new tab
+            card.target = '_blank';
+            card.rel = 'noopener';
+          }
 
           const cardContent = document.createElement('div');
           cardContent.className = 'card-content';
@@ -356,11 +687,17 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
           if (fileType === 'image') {
             // Load image with caching
             loadImageCard(file, cardContent);
+          } else if (fileType === 'video') {
+            // Load video preview
+            loadVideoCard(file, cardContent);
+          } else if (fileType === 'audio') {
+            // Load audio waveform
+            loadAudioCard(file, cardContent);
           } else if (fileType === 'code' || fileType === 'document') {
-            // Load text preview with caching
+            // Load text summary
             loadTextCard(file, cardContent);
-          } else if (fileType === 'video' || fileType === 'audio' || fileType === 'archive' || fileType === 'binary' || fileType === 'other') {
-            // Load binary preview with caching
+          } else {
+            // Load binary preview with caching or detection
             loadBinaryCard(file, fileType, cardContent);
           }
 
@@ -440,7 +777,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 
   .card-content {
     width: 100%;
-    aspect-ratio: 1 / 1;
+    aspect-ratio: 16 / 10;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -499,6 +836,242 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
     to {
       transform: rotate(360deg);
     }
+  }
+
+  /* Text preview styles */
+  .text-preview {
+    width: 100%;
+    height: 100%;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    padding: 1rem;
+    overflow: hidden;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+
+  .extension-badge {
+    display: inline-block;
+    background: #007acc;
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    font-weight: bold;
+    margin-bottom: 0.75rem;
+    font-size: 0.9rem;
+  }
+
+  .text-content {
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+
+  /* Video preview styles */
+  .video-preview {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .play-overlay {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 60px;
+    height: 60px;
+    background: rgba(0, 0, 0, 0.7);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    color: white;
+    cursor: pointer;
+    transition: all 0.3s ease;
+  }
+
+  .play-overlay:hover {
+    background: rgba(0, 0, 0, 0.85);
+    transform: translate(-50%, -50%) scale(1.1);
+  }
+
+  /* Audio waveform styles */
+  .audio-waveform {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  .audio-play-button {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 60px;
+    height: 60px;
+    background: rgba(0, 0, 0, 0.7);
+    border: none;
+    border-radius: 50%;
+    color: white;
+    font-size: 24px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+  }
+
+  .audio-play-button:hover {
+    background: rgba(0, 0, 0, 0.85);
+    transform: translate(-50%, -50%) scale(1.1);
+  }
+
+  .audio-play-button.playing {
+    background: rgba(0, 120, 220, 0.8);
+  }
+
+  .audio-play-button.playing:hover {
+    background: rgba(0, 120, 220, 0.95);
+  }
+
+  /* Modal overlay styles */
+  .modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    opacity: 0;
+    transition: opacity 0.3s ease, background 0.3s ease;
+    padding: 2rem;
+  }
+
+  .modal-overlay.active {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.85);
+  }
+
+  .modal-content {
+    background: white;
+    border-radius: 12px;
+    max-width: 80vw;
+    max-height: 80vh;
+    width: auto;
+    display: flex;
+    flex-direction: column;
+    transform: scale(0.9);
+    transition: transform 0.3s ease;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  }
+
+  .modal-overlay.active .modal-content {
+    transform: scale(1);
+  }
+
+  .modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1.5rem;
+    border-bottom: 1px solid #e0e0e0;
+    background: #f8f9fa;
+  }
+
+  .modal-header h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #2c3e50;
+    word-break: break-word;
+  }
+
+  .modal-close {
+    background: none;
+    border: none;
+    font-size: 2rem;
+    line-height: 1;
+    cursor: pointer;
+    color: #666;
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+    margin-left: 1rem;
+  }
+
+  .modal-close:hover {
+    background: #e0e0e0;
+    color: #000;
+  }
+
+  .modal-body {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: auto;
+    min-height: 200px;
+    max-height: calc(80vh - 160px);
+  }
+
+  .modal-image {
+    max-width: 100%;
+    max-height: 100%;
+    object-fit: contain;
+  }
+
+  .modal-video {
+    width: 100%;
+    max-height: calc(80vh - 160px);
+  }
+
+  .modal-pdf {
+    width: 100%;
+    height: calc(80vh - 160px);
+    border: none;
+  }
+
+  .modal-footer {
+    padding: 1rem 1.5rem;
+    border-top: 1px solid #e0e0e0;
+    display: flex;
+    justify-content: flex-end;
+    background: #f8f9fa;
+  }
+
+  .download-button {
+    background: #007acc;
+    color: white;
+    border: none;
+    padding: 0.75rem 1.5rem;
+    border-radius: 6px;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .download-button:hover {
+    background: #005a9e;
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(0, 122, 204, 0.3);
   }
 
   .video-placeholder,
