@@ -6,6 +6,21 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
   <h1>Paste Gallery</h1>
   <p class="subtitle">Visual gallery of files from <a href="https://home.codevoid.de/paste/all.html" target="_blank" rel="noopener">codevoid.de/paste</a></p>
 
+  <div class="filters">
+    <input type="text" id="nameFilter" placeholder="Filter by file name..." class="filter-input" />
+    <select id="typeFilter" class="filter-select">
+      <option value="">All file types</option>
+      <option value="image">Images</option>
+      <option value="video">Videos</option>
+      <option value="audio">Audio</option>
+      <option value="text">Text/Code</option>
+      <option value="pdf">PDF</option>
+      <option value="archive">Archives</option>
+      <option value="binary">Binary</option>
+      <option value="other">Other</option>
+    </select>
+  </div>
+
   <div id="loading" class="loading">Loading files...</div>
   <div id="gallery" class="gallery"></div>
 </BaseLayout>
@@ -20,6 +35,11 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
   let db: IDBDatabase | null = null;
   let currentlyPlayingAudio: HTMLAudioElement | null = null;
   let currentlyPlayingVideo: HTMLVideoElement | null = null;
+
+  // Lazy loading state
+  let allFiles: Array<{name: string, url: string, extension: string, fileType?: string}> = [];
+  let loadedCards: Set<string> = new Set();
+  let observer: IntersectionObserver | null = null;
 
   async function initDB(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
@@ -191,7 +211,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
     return 'other';
   }
 
-  async function createKenBurnsPreview(images: string[]): Promise<HTMLCanvasElement> {
+  async function createDissolvePreview(images: string[]): Promise<HTMLCanvasElement> {
     const canvas = document.createElement('canvas');
     const ctx = canvas.getContext('2d');
 
@@ -201,12 +221,9 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
     const height = Math.round(THUMBNAIL_SIZE * 10 / 16);
     canvas.width = width;
     canvas.height = height;
-    canvas.className = 'ken-burns-preview';
+    canvas.className = 'dissolve-preview';
 
-    let currentImageIndex = 0;
-    let animationProgress = 0;
-    const imageDuration = 1000; // 1 second per image
-    const totalDuration = 3000; // 3 seconds total
+    const totalDuration = 6000; // 6 seconds total (2s display + 1s transition for each of 3 images)
     let startTime = Date.now();
 
     // Load all images
@@ -225,35 +242,29 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
       const elapsed = Date.now() - startTime;
       const progress = (elapsed % totalDuration) / totalDuration;
 
-      currentImageIndex = Math.floor(progress * 3);
-      animationProgress = (progress * 3) % 1;
+      // Each image gets 2 seconds: 1s transition + 1s pause
+      // Image 0: 0-2s, Image 1: 2-4s, Image 2: 4-6s
+      const currentImageIndex = Math.floor(progress * 3);
+      const imageProgress = (progress * 3) % 1; // 0 to 1 within current image slot
 
-      const img = imageElements[currentImageIndex];
+      const currentImg = imageElements[currentImageIndex];
+      const nextImg = imageElements[(currentImageIndex + 1) % 3];
 
-      if (img) {
-        // Ken Burns effect: zoom and pan
-        const scale = 1 + animationProgress * 0.1; // Slight zoom in
-        const panX = animationProgress * 20; // Slight pan
-        const panY = animationProgress * 10;
-
-        const drawWidth = width * scale;
-        const drawHeight = height * scale;
-        const drawX = (width - drawWidth) / 2 - panX;
-        const drawY = (height - drawHeight) / 2 - panY;
-
+      if (currentImg) {
         ctx.clearRect(0, 0, width, height);
-        ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
 
-        // Fade transition between images
-        if (animationProgress > 0.8 && currentImageIndex < 2) {
-          const nextImg = imageElements[currentImageIndex + 1];
-          if (nextImg) {
-            const fadeAlpha = (animationProgress - 0.8) / 0.2;
-            ctx.globalAlpha = fadeAlpha;
-            ctx.drawImage(nextImg, 0, 0, width, height);
-            ctx.globalAlpha = 1;
-          }
+        // Draw current image
+        ctx.globalAlpha = 1;
+        ctx.drawImage(currentImg, 0, 0, width, height);
+
+        // During first second (0-0.5 of imageProgress), do dissolve transition
+        if (imageProgress < 0.5 && nextImg) {
+          const dissolveAlpha = imageProgress * 2; // 0 to 1 over first 0.5
+          ctx.globalAlpha = dissolveAlpha;
+          ctx.drawImage(nextImg, 0, 0, width, height);
         }
+
+        ctx.globalAlpha = 1;
       }
 
       requestAnimationFrame(animate);
@@ -405,7 +416,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
     if (cached) {
       // If we have cached preview images, create animation
       const images = JSON.parse(cached);
-      const canvas = await createKenBurnsPreview(images);
+      const canvas = await createDissolvePreview(images);
       cardContent.appendChild(canvas);
     } else {
       // Show loading
@@ -420,7 +431,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
           await saveThumbnailToCache(file.url + '_animated', JSON.stringify(images));
           cardContent.removeChild(loadingDiv);
 
-          const canvas = await createKenBurnsPreview(images);
+          const canvas = await createDissolvePreview(images);
           cardContent.appendChild(canvas);
         } else {
           cardContent.removeChild(loadingDiv);
@@ -439,7 +450,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 
     if (cached) {
       const images = JSON.parse(cached);
-      const canvas = await createKenBurnsPreview(images);
+      const canvas = await createDissolvePreview(images);
       cardContent.appendChild(canvas);
     } else {
       try {
@@ -448,7 +459,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
         if (images.length > 0) {
           await saveThumbnailToCache(file.url + '_animated', JSON.stringify(images));
 
-          const canvas = await createKenBurnsPreview(images);
+          const canvas = await createDissolvePreview(images);
           cardContent.appendChild(canvas);
         }
       } catch (error) {
@@ -534,6 +545,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
     // Create audio element
     const audio = new Audio(file.url);
     audio.loop = false;
+    audio.crossOrigin = 'anonymous';
 
     // Create progress bar container
     const progressContainer = document.createElement('div');
@@ -578,15 +590,37 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
       }
     };
 
+    // Audio context for visualization
+    let audioContext: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    let analyserData: Uint8Array<ArrayBuffer> | null = null;
+    let source: MediaElementAudioSourceNode | null = null;
+
     // Create play/pause button
     const playButton = document.createElement('button');
     playButton.className = 'audio-play-button';
     playButton.innerHTML = '▶';
-    playButton.onclick = (e) => {
+    playButton.onclick = async (e) => {
       e.preventDefault();
       e.stopPropagation();
 
       if (audio.paused) {
+        // Initialize audio context on first play (user interaction required)
+        if (!audioContext) {
+          try {
+            audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            analyserData = new Uint8Array(analyser.frequencyBinCount);
+
+            source = audioContext.createMediaElementSource(audio);
+            source.connect(analyser);
+            analyser.connect(audioContext.destination);
+          } catch (error) {
+            console.error('Failed to create audio context:', error);
+          }
+        }
+
         // Pause all other audio/video
         if (currentlyPlayingAudio && currentlyPlayingAudio !== audio) {
           currentlyPlayingAudio.pause();
@@ -595,10 +629,14 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
           currentlyPlayingVideo.pause();
         }
 
-        audio.play();
-        playButton.innerHTML = '⏸';
-        playButton.classList.add('playing');
-        currentlyPlayingAudio = audio;
+        try {
+          await audio.play();
+          playButton.innerHTML = '⏸';
+          playButton.classList.add('playing');
+          currentlyPlayingAudio = audio;
+        } catch (error) {
+          console.error('Failed to play audio:', error);
+        }
       } else {
         audio.pause();
         playButton.innerHTML = '▶';
@@ -619,136 +657,60 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 
     // Colorful flowing waveform animation
     let animationFrame = 0;
-    let analyserData: Uint8Array | null = null;
 
-    // Wave points for smooth flowing animation
-    const wavePoints: number[] = [];
-    for (let i = 0; i < 100; i++) {
-      wavePoints.push(Math.random());
-    }
+    function drawWaveform() {
+      requestAnimationFrame(drawWaveform);
 
-    // Try to create audio context for real-time visualization
-    try {
-      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const analyser = audioContext.createAnalyser();
-      const source = audioContext.createMediaElementSource(audio);
-      source.connect(analyser);
-      analyser.connect(audioContext.destination);
-      analyser.fftSize = 256;
-      analyserData = new Uint8Array(analyser.frequencyBinCount);
+      // Black background
+      ctx.fillStyle = '#000000';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      function drawWaveform() {
-        requestAnimationFrame(drawWaveform);
+      const centerY = canvas.height / 2;
+      const numWaves = 3;
 
-        // Black background
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      if (!audio.paused && analyser && analyserData) {
+        // Draw real-time frequency data as flowing waves
+        analyser.getByteFrequencyData(analyserData);
 
-        const centerY = canvas.height / 2;
-        const numWaves = 3;
+        for (let waveIdx = 0; waveIdx < numWaves; waveIdx++) {
+          ctx.beginPath();
 
-        if (!audio.paused && analyserData) {
-          // Draw real-time frequency data as flowing waves
-          analyser.getByteFrequencyData(analyserData);
+          const colors = [
+            ['#ff6b35', '#f7931e', '#fdc830'], // Orange to yellow
+            ['#4facfe', '#00f2fe', '#43e97b'], // Blue to cyan to green
+            ['#fa709a', '#fee140', '#30cfd0']  // Pink to yellow to cyan
+          ];
 
-          for (let waveIdx = 0; waveIdx < numWaves; waveIdx++) {
-            ctx.beginPath();
+          const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
+          const colorSet = colors[waveIdx];
+          gradient.addColorStop(0, colorSet[0]);
+          gradient.addColorStop(0.5, colorSet[1]);
+          gradient.addColorStop(1, colorSet[2]);
 
-            const colors = [
-              ['#ff6b35', '#f7931e', '#fdc830'], // Orange to yellow
-              ['#4facfe', '#00f2fe', '#43e97b'], // Blue to cyan to green
-              ['#fa709a', '#fee140', '#30cfd0']  // Pink to yellow to cyan
-            ];
+          ctx.strokeStyle = gradient;
+          ctx.lineWidth = 3;
+          ctx.globalAlpha = 0.7 - waveIdx * 0.15;
 
-            const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
-            const colorSet = colors[waveIdx];
-            gradient.addColorStop(0, colorSet[0]);
-            gradient.addColorStop(0.5, colorSet[1]);
-            gradient.addColorStop(1, colorSet[2]);
+          for (let x = 0; x < canvas.width; x++) {
+            const dataIdx = Math.floor((x / canvas.width) * analyserData.length);
+            const amplitude = (analyserData[dataIdx] / 255) * 80;
+            const offset = waveIdx * 20;
 
-            ctx.strokeStyle = gradient;
-            ctx.lineWidth = 3;
-            ctx.globalAlpha = 0.7 - waveIdx * 0.15;
+            const y = centerY + Math.sin(x * 0.02 + animationFrame * 0.05 + waveIdx) * amplitude + offset;
 
-            for (let x = 0; x < canvas.width; x++) {
-              const dataIdx = Math.floor((x / canvas.width) * analyserData.length);
-              const amplitude = (analyserData[dataIdx] / 255) * 80;
-              const offset = waveIdx * 20;
-
-              const y = centerY + Math.sin(x * 0.02 + animationFrame * 0.05 + waveIdx) * amplitude + offset;
-
-              if (x === 0) {
-                ctx.moveTo(x, y);
-              } else {
-                ctx.lineTo(x, y);
-              }
+            if (x === 0) {
+              ctx.moveTo(x, y);
+            } else {
+              ctx.lineTo(x, y);
             }
-
-            ctx.stroke();
           }
 
-          ctx.globalAlpha = 1;
-        } else {
-          // Draw idle flowing waves
-          for (let waveIdx = 0; waveIdx < numWaves; waveIdx++) {
-            ctx.beginPath();
-
-            const colors = [
-              ['#ff6b35', '#f7931e', '#fdc830'],
-              ['#4facfe', '#00f2fe', '#43e97b'],
-              ['#fa709a', '#fee140', '#30cfd0']
-            ];
-
-            const gradient = ctx.createLinearGradient(0, 0, canvas.width, 0);
-            const colorSet = colors[waveIdx];
-            gradient.addColorStop(0, colorSet[0]);
-            gradient.addColorStop(0.5, colorSet[1]);
-            gradient.addColorStop(1, colorSet[2]);
-
-            ctx.strokeStyle = gradient;
-            ctx.lineWidth = 3;
-            ctx.globalAlpha = 0.6 - waveIdx * 0.15;
-
-            for (let x = 0; x < canvas.width; x++) {
-              const amplitude = 30 + Math.sin(animationFrame * 0.03 + waveIdx) * 10;
-              const frequency = 0.015 + waveIdx * 0.005;
-              const offset = waveIdx * 15;
-
-              const y = centerY +
-                Math.sin(x * frequency + animationFrame * 0.05 + waveIdx * Math.PI * 0.5) * amplitude +
-                Math.sin(x * frequency * 0.5 + animationFrame * 0.03) * (amplitude * 0.5) +
-                offset;
-
-              if (x === 0) {
-                ctx.moveTo(x, y);
-              } else {
-                ctx.lineTo(x, y);
-              }
-            }
-
-            ctx.stroke();
-          }
-
-          ctx.globalAlpha = 1;
+          ctx.stroke();
         }
 
-        animationFrame++;
-      }
-
-      drawWaveform();
-    } catch (error) {
-      // Fallback to idle animation if audio context fails
-      console.error('Failed to create audio context:', error);
-
-      function drawSimpleWaveform() {
-        requestAnimationFrame(drawSimpleWaveform);
-
-        ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-        const centerY = canvas.height / 2;
-        const numWaves = 3;
-
+        ctx.globalAlpha = 1;
+      } else {
+        // Draw idle flowing waves
         for (let waveIdx = 0; waveIdx < numWaves; waveIdx++) {
           ctx.beginPath();
 
@@ -789,11 +751,12 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
         }
 
         ctx.globalAlpha = 1;
-        animationFrame++;
       }
 
-      drawSimpleWaveform();
+      animationFrame++;
     }
+
+    drawWaveform();
   }
 
 
@@ -912,6 +875,122 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
     setTimeout(() => modal.classList.add('active'), 10);
   }
 
+  function setupIntersectionObserver() {
+    observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach(entry => {
+          if (entry.isIntersecting) {
+            const card = entry.target as HTMLElement;
+            const fileUrl = card.dataset.fileUrl;
+
+            if (fileUrl && !loadedCards.has(fileUrl)) {
+              loadedCards.add(fileUrl);
+              loadCardContent(card);
+            }
+          }
+        });
+      },
+      {
+        root: null,
+        rootMargin: '400px', // Load 400px before entering viewport
+        threshold: 0.01
+      }
+    );
+  }
+
+  async function loadCardContent(card: HTMLElement) {
+    const fileUrl = card.dataset.fileUrl;
+    const fileName = card.dataset.fileName;
+    const extension = card.dataset.extension;
+    const fileType = card.dataset.fileType;
+
+    if (!fileUrl || !fileName || !extension || !fileType) return;
+
+    const file = { name: fileName, url: fileUrl, extension };
+    const cardContent = card.querySelector('.card-content') as HTMLElement;
+
+    if (!cardContent) return;
+
+    // Load appropriate preview
+    if (fileType === 'image') {
+      loadImageCard(file, cardContent);
+    } else if (fileType === 'video') {
+      loadVideoCard(file, cardContent);
+    } else if (fileType === 'audio') {
+      loadAudioCard(file, cardContent);
+    } else if (fileType === 'text') {
+      loadAnimatedTextCard(file, cardContent);
+    } else {
+      loadAnimatedBinaryCard(file, fileType, cardContent);
+    }
+  }
+
+  function filterFiles() {
+    const nameFilter = (document.getElementById('nameFilter') as HTMLInputElement)?.value.toLowerCase() || '';
+    const typeFilter = (document.getElementById('typeFilter') as HTMLSelectElement)?.value || '';
+
+    const galleryEl = document.getElementById('gallery');
+    if (!galleryEl) return;
+
+    // Clear gallery
+    galleryEl.innerHTML = '';
+    loadedCards.clear();
+
+    const filteredFiles = allFiles.filter(file => {
+      const nameMatch = !nameFilter || file.name.toLowerCase().includes(nameFilter);
+      const typeMatch = !typeFilter || file.fileType === typeFilter;
+      return nameMatch && typeMatch;
+    });
+
+    // Render filtered cards
+    filteredFiles.forEach(file => {
+      createCard(file, galleryEl);
+    });
+  }
+
+  function createCard(file: {name: string, url: string, extension: string, fileType?: string}, galleryEl: HTMLElement) {
+    const card = document.createElement('a');
+    card.href = file.url;
+    card.className = `card ${file.fileType || ''}`;
+    card.dataset.fileUrl = file.url;
+    card.dataset.fileName = file.name;
+    card.dataset.extension = file.extension;
+    card.dataset.fileType = file.fileType || '';
+
+    // For video, image, and PDF: prevent default and show popup
+    if (file.fileType === 'image' || file.fileType === 'video' || file.fileType === 'pdf') {
+      card.onclick = (e) => {
+        e.preventDefault();
+        createPopupModal(file, file.fileType!);
+      };
+    } else {
+      // For other files: open in new tab
+      card.target = '_blank';
+      card.rel = 'noopener';
+    }
+
+    const cardContent = document.createElement('div');
+    cardContent.className = 'card-content';
+
+    // Add loading placeholder
+    const loadingDiv = document.createElement('div');
+    loadingDiv.className = 'image-loading';
+    cardContent.appendChild(loadingDiv);
+
+    const cardFooter = document.createElement('div');
+    cardFooter.className = 'card-footer';
+    cardFooter.innerHTML = `<span class="filename">${file.name}</span>`;
+
+    card.appendChild(cardContent);
+    card.appendChild(cardFooter);
+    galleryEl.appendChild(card);
+
+    // Observe card for lazy loading
+    if (observer) {
+      observer.observe(card);
+    }
+  }
+
   async function loadGallery() {
     const loadingEl = document.getElementById('loading');
     const galleryEl = document.getElementById('gallery');
@@ -938,79 +1017,58 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
         });
       }
 
+      // Detect file types for all files
+      for (const file of files) {
+        const detectedType = await detectFileTypeFromBytes(file.url);
+
+        let fileType = detectedType;
+
+        // Special handling for known extensions
+        if (audioExtensions.includes(file.extension)) {
+          fileType = 'audio';
+        } else if (videoExtensions.includes(file.extension)) {
+          fileType = 'video';
+        } else if (file.extension === 'pdf') {
+          fileType = 'pdf';
+        } else if (detectedType === 'image') {
+          fileType = 'image';
+        } else if (detectedType === 'text' || codeExtensions.includes(file.extension) || docExtensions.includes(file.extension)) {
+          fileType = 'text';
+        } else if (detectedType === 'archive') {
+          fileType = 'archive';
+        } else if (detectedType === 'binary') {
+          fileType = 'binary';
+        } else {
+          fileType = 'other';
+        }
+
+        (file as any).fileType = fileType;
+      }
+
+      allFiles = files as any;
+
       // Hide loading, show gallery
       if (loadingEl) loadingEl.style.display = 'none';
 
-      // Render cards
+      // Setup intersection observer
+      setupIntersectionObserver();
+
+      // Setup filters
+      const nameFilterEl = document.getElementById('nameFilter');
+      const typeFilterEl = document.getElementById('typeFilter');
+
+      if (nameFilterEl) {
+        nameFilterEl.addEventListener('input', filterFiles);
+      }
+
+      if (typeFilterEl) {
+        typeFilterEl.addEventListener('change', filterFiles);
+      }
+
+      // Initial render
       if (galleryEl) {
-        files.forEach(async file => {
-          const card = document.createElement('a');
-          card.href = file.url;
-          card.className = 'card';
-
-          const cardContent = document.createElement('div');
-          cardContent.className = 'card-content';
-
-          const cardFooter = document.createElement('div');
-          cardFooter.className = 'card-footer';
-          cardFooter.innerHTML = `<span class="filename">${file.name}</span>`;
-
-          card.appendChild(cardContent);
-          card.appendChild(cardFooter);
-          galleryEl.appendChild(card);
-
-          // Detect file type from content
-          const detectedType = await detectFileTypeFromBytes(file.url);
-          const extensionType = getFileType(file.extension);
-
-          // Prefer detected type, but use extension as fallback
-          let fileType = detectedType;
-
-          // Special handling for known extensions
-          if (audioExtensions.includes(file.extension)) {
-            fileType = 'audio';
-          } else if (videoExtensions.includes(file.extension)) {
-            fileType = 'video';
-          } else if (file.extension === 'pdf') {
-            fileType = 'pdf';
-          } else if (detectedType === 'image') {
-            fileType = 'image';
-          } else if (detectedType === 'text' || codeExtensions.includes(file.extension) || docExtensions.includes(file.extension)) {
-            fileType = 'text';
-          } else if (detectedType === 'archive') {
-            fileType = 'archive';
-          } else if (detectedType === 'binary') {
-            fileType = 'binary';
-          } else {
-            fileType = 'other';
-          }
-
-          card.classList.add(fileType);
-
-          // For video, image, and PDF: prevent default and show popup
-          if (fileType === 'image' || fileType === 'video' || fileType === 'pdf') {
-            card.onclick = (e) => {
-              e.preventDefault();
-              createPopupModal(file, fileType);
-            };
-          } else {
-            // For other files: open in new tab
-            card.target = '_blank';
-            card.rel = 'noopener';
-          }
-
-          // Load appropriate preview
-          if (fileType === 'image') {
-            loadImageCard(file, cardContent);
-          } else if (fileType === 'video') {
-            loadVideoCard(file, cardContent);
-          } else if (fileType === 'audio') {
-            loadAudioCard(file, cardContent);
-          } else if (fileType === 'text') {
-            loadAnimatedTextCard(file, cardContent);
-          } else {
-            loadAnimatedBinaryCard(file, fileType, cardContent);
-          }
+        files.forEach(file => {
+          createCard(file as any, galleryEl);
         });
       }
     } catch (error) {
@@ -1039,6 +1097,39 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
   .subtitle a {
     color: #000;
     text-decoration: underline;
+  }
+
+  .filters {
+    display: flex;
+    gap: 1rem;
+    margin: 1.5rem 0;
+    flex-wrap: wrap;
+  }
+
+  .filter-input,
+  .filter-select {
+    padding: 0.75rem 1rem;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    font-size: 1rem;
+    transition: all 0.2s ease;
+    background: white;
+  }
+
+  .filter-input {
+    flex: 1;
+    min-width: 200px;
+  }
+
+  .filter-select {
+    min-width: 180px;
+  }
+
+  .filter-input:focus,
+  .filter-select:focus {
+    outline: none;
+    border-color: #007acc;
+    box-shadow: 0 0 0 3px rgba(0, 122, 204, 0.1);
   }
 
   .loading {
@@ -1200,8 +1291,8 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
     transform: translate(-50%, -50%) scale(1.1);
   }
 
-  /* Ken Burns preview styles */
-  .ken-burns-preview {
+  /* Dissolve preview styles */
+  .dissolve-preview {
     width: 100%;
     height: 100%;
     object-fit: cover;
