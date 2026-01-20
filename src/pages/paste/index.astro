@@ -242,8 +242,10 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
       const elapsed = Date.now() - startTime;
       const progress = (elapsed % totalDuration) / totalDuration;
 
-      // Each image gets 2 seconds: 1s transition + 1s pause
-      // Image 0: 0-2s, Image 1: 2-4s, Image 2: 4-6s
+      // Each image gets 2 seconds: 1s pause + 1s transition to next
+      // Image 0: 0-2s (0-1s pause, 1-2s transition to 1)
+      // Image 1: 2-4s (2-3s pause, 3-4s transition to 2)
+      // Image 2: 4-6s (4-5s pause, 5-6s transition to 0) - smooth loop!
       const currentImageIndex = Math.floor(progress * 3);
       const imageProgress = (progress * 3) % 1; // 0 to 1 within current image slot
 
@@ -257,9 +259,9 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
         ctx.globalAlpha = 1;
         ctx.drawImage(currentImg, 0, 0, width, height);
 
-        // During first second (0-0.5 of imageProgress), do dissolve transition
-        if (imageProgress < 0.5 && nextImg) {
-          const dissolveAlpha = imageProgress * 2; // 0 to 1 over first 0.5
+        // During second half (0.5-1.0 of imageProgress), do dissolve transition to next
+        if (imageProgress >= 0.5 && nextImg) {
+          const dissolveAlpha = (imageProgress - 0.5) * 2; // 0 to 1 over second half
           ctx.globalAlpha = dissolveAlpha;
           ctx.drawImage(nextImg, 0, 0, width, height);
         }
