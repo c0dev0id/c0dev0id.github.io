@@ -419,27 +419,17 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
       const canvas = await createDissolvePreview(images);
       cardContent.appendChild(canvas);
     } else {
-      // Show loading
-      const loadingDiv = document.createElement('div');
-      loadingDiv.className = 'image-loading';
-      cardContent.appendChild(loadingDiv);
-
       try {
         const images = await generatePreviewImagesFromText(file.url);
 
         if (images.length > 0) {
           await saveThumbnailToCache(file.url + '_animated', JSON.stringify(images));
-          cardContent.removeChild(loadingDiv);
 
           const canvas = await createDissolvePreview(images);
           cardContent.appendChild(canvas);
-        } else {
-          cardContent.removeChild(loadingDiv);
         }
       } catch (error) {
-        if (loadingDiv.parentNode) {
-          cardContent.removeChild(loadingDiv);
-        }
+        console.error('Failed to load animated text card:', error);
       }
     }
   }
@@ -463,7 +453,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
           cardContent.appendChild(canvas);
         }
       } catch (error) {
-        console.error('Failed to create animated preview:', error);
+        console.error('Failed to create animated binary preview:', error);
       }
     }
   }
@@ -476,25 +466,15 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
       // Use cached thumbnail immediately as background
       cardContent.style.backgroundImage = `url(${cached})`;
     } else {
-      // Show loading placeholder
-      const loadingDiv = document.createElement('div');
-      loadingDiv.className = 'image-loading';
-      loadingDiv.textContent = '...';
-      cardContent.appendChild(loadingDiv);
-
       // Create and cache thumbnail
       try {
         const thumbnail = await createThumbnail(file.url);
         await saveThumbnailToCache(file.url, thumbnail);
 
         cardContent.style.backgroundImage = `url(${thumbnail})`;
-        cardContent.removeChild(loadingDiv);
       } catch (error) {
         // Fallback to original image as background
         cardContent.style.backgroundImage = `url(${file.url})`;
-        if (loadingDiv.parentNode) {
-          cardContent.removeChild(loadingDiv);
-        }
       }
     }
   }
@@ -892,7 +872,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
       },
       {
         root: null,
-        rootMargin: '400px', // Load 400px before entering viewport
+        rootMargin: '800px', // Load ~2 rows before entering viewport (for next 8 cards)
         threshold: 0.01
       }
     );
@@ -902,14 +882,54 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
     const fileUrl = card.dataset.fileUrl;
     const fileName = card.dataset.fileName;
     const extension = card.dataset.extension;
-    const fileType = card.dataset.fileType;
+    let fileType = card.dataset.fileType;
 
-    if (!fileUrl || !fileName || !extension || !fileType) return;
+    if (!fileUrl || !fileName || !extension) return;
 
     const file = { name: fileName, url: fileUrl, extension };
     const cardContent = card.querySelector('.card-content') as HTMLElement;
 
     if (!cardContent) return;
+
+    // Detect file type if not already detected
+    if (!fileType || fileType === '') {
+      const detectedType = await detectFileTypeFromBytes(file.url);
+
+      // Special handling for known extensions
+      if (audioExtensions.includes(file.extension)) {
+        fileType = 'audio';
+      } else if (videoExtensions.includes(file.extension)) {
+        fileType = 'video';
+      } else if (file.extension === 'pdf') {
+        fileType = 'pdf';
+      } else if (detectedType === 'image') {
+        fileType = 'image';
+      } else if (detectedType === 'text' || codeExtensions.includes(file.extension) || docExtensions.includes(file.extension)) {
+        fileType = 'text';
+      } else if (detectedType === 'archive') {
+        fileType = 'archive';
+      } else if (detectedType === 'binary') {
+        fileType = 'binary';
+      } else {
+        fileType = 'other';
+      }
+
+      // Update card with detected file type
+      card.dataset.fileType = fileType;
+      card.classList.add(fileType);
+
+      // Update in allFiles array
+      const fileInArray = allFiles.find(f => f.url === fileUrl);
+      if (fileInArray) {
+        fileInArray.fileType = fileType;
+      }
+    }
+
+    // Remove loading placeholder
+    const loadingDiv = cardContent.querySelector('.image-loading');
+    if (loadingDiv) {
+      cardContent.removeChild(loadingDiv);
+    }
 
     // Load appropriate preview
     if (fileType === 'image') {
@@ -1004,7 +1024,7 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
 
       // Parse links from the HTML
       const linkRegex = /<a href="\/paste\/([^"]+)">([^<]+)<\/a>/g;
-      const files: Array<{name: string, url: string, extension: string}> = [];
+      const files: Array<{name: string, url: string, extension: string, fileType?: string}> = [];
       let match;
 
       while ((match = linkRegex.exec(html)) !== null) {
@@ -1013,39 +1033,12 @@ import BaseLayout from '../../layouts/BaseLayout.astro';
         files.push({
           name: filename,
           url: `https://home.codevoid.de/paste/${filename}`,
-          extension
+          extension,
+          fileType: '' // Will be detected lazily when card becomes visible
         });
       }
 
-      // Detect file types for all files
-      for (const file of files) {
-        const detectedType = await detectFileTypeFromBytes(file.url);
-
-        let fileType = detectedType;
-
-        // Special handling for known extensions
-        if (audioExtensions.includes(file.extension)) {
-          fileType = 'audio';
-        } else if (videoExtensions.includes(file.extension)) {
-          fileType = 'video';
-        } else if (file.extension === 'pdf') {
-          fileType = 'pdf';
-        } else if (detectedType === 'image') {
-          fileType = 'image';
-        } else if (detectedType === 'text' || codeExtensions.includes(file.extension) || docExtensions.includes(file.extension)) {
-          fileType = 'text';
-        } else if (detectedType === 'archive') {
-          fileType = 'archive';
-        } else if (detectedType === 'binary') {
-          fileType = 'binary';
-        } else {
-          fileType = 'other';
-        }
-
-        (file as any).fileType = fileType;
-      }
-
-      allFiles = files as any;
+      allFiles = files;
 
       // Hide loading, show gallery
       if (loadingEl) loadingEl.style.display = 'none';
